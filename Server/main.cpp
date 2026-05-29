@@ -29,7 +29,7 @@ void main()
 		return;
 	}
 
-	//2) Параметры подключения:
+	//2) Параметры подключения :
 	addrinfo hints;
 	addrinfo* result;
 	ZeroMemory(&hints, sizeof(hints));
