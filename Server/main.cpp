@@ -1,4 +1,5 @@
-﻿#ifndef WIN32_LEAN_AND_MEAN
+﻿#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif // !define WIN32_LEAN_AND_MEAN
 
@@ -9,6 +10,8 @@
 #include<iphlpapi.h>
 
 #include<FormatLastError.h>
+#include<Messages.h>
+
 using namespace std;
 
 #pragma comment(lib, "WS2_32.lib")
@@ -16,7 +19,24 @@ using namespace std;
 
 #define PORT	"27015"
 #define BUFFER_LENGTH	1500
-#define MAX_CONNECTIONS	 5
+#define MAX_CONNECTIONS	 3
+
+SOCKET sockets[MAX_CONNECTIONS] = {};
+DWORD dwThreadIDs[MAX_CONNECTIONS] = {};
+HANDLE hThreads[MAX_CONNECTIONS] = {};
+INT g_ActiveClients = 0;	//счетчик клиентов
+
+struct ClientParameters
+{
+	SOCKET client_socket;
+	sockaddr_in client_address;
+};
+
+VOID ClientHandle(SOCKET client_socket);
+VOID ShowActiveClients();
+
+//VOID Release(SOCKET client_socket);
+//VOID ShowActiveClients();
 
 void main()
 {
@@ -95,25 +115,112 @@ void main()
 	}
 
 	//6) Обработка соединений от клиентов:
-	SOCKET client_socket = accept(listen_socket, NULL, NULL);
-	dwError = WSAGetLastError();
-	if (client_socket == INVALID_SOCKET)
-	{
-		cout << FormatLastError(dwError, szError) << endl;
-		cout << "Accept failed with error: " << WSAGetLastError() << endl;
-	}
 
+	do
+	{
+		ShowActiveClients();
+		sockaddr_in client_address;
+		int client_addrlen = sizeof(client_address);
+		client_address.sin_family = AF_INET;
+		SOCKET client_socket = accept(listen_socket, (SOCKADDR*)&client_address, &client_addrlen);
+		dwError = WSAGetLastError();
+		if (client_socket == INVALID_SOCKET)
+		{
+			cout << FormatLastError(dwError, szError) << endl;
+			cout << "Accept failed with error: " << WSAGetLastError() << endl;
+		}
+		//6.1) Получаем информацию о сокете клиента:
+		//sockaddr_in client_address_in = (sockaddr_in)client_address;
+		cout << inet_ntoa(client_address.sin_addr) << ":" << ntohs(client_address.sin_port) << endl;;
+
+		//ClientHandle(client_socket);
+		if (g_ActiveClients < MAX_CONNECTIONS)
+		{
+			sockets[g_ActiveClients] = client_socket;
+			cout << client_socket << "\t" << sockets[g_ActiveClients] << endl;
+			hThreads[g_ActiveClients] = CreateThread
+			(
+				NULL,	//Security attributes
+				0,		//Stack size
+				(LPTHREAD_START_ROUTINE)ClientHandle,	//Указатель на функцию, которая будет выполняться в потоке
+				(LPVOID)sockets[g_ActiveClients],
+				0,
+				&dwThreadIDs[g_ActiveClients]
+			);
+			g_ActiveClients++;
+		}
+		else
+		{
+			CHAR recv_buffer[BUFFER_LENGTH] = {};
+			iResult = recv(client_socket, recv_buffer, BUFFER_LENGTH, NULL);
+			/*if (iResult != 0)
+			{
+				FormatLastError(WSAGetLastError(), szError);
+				cout << szError << endl;
+			}
+			else*/ cout << recv_buffer << endl;
+			//CHAR szDeclainMessage[] = ;
+			iResult = send(client_socket, DECLINE_MESSAGE, strlen(DECLINE_MESSAGE), NULL);
+			shutdown(client_socket, SD_BOTH);
+			closesocket(client_socket);
+		}
+
+	} while (true);
+
+	WaitForMultipleObjects(MAX_CONNECTIONS, hThreads, TRUE, INFINITE);
+
+	//iResult = shutdown(listen_socket, SD_BOTH);
+	//dwError = WSAGetLastError();
+	//if (iResult == SOCKET_ERROR)cout << "Server shutdown failed with  " << FormatLastError(dwError, szError) << endl;
+
+
+	closesocket(listen_socket);
+	WSACleanup();
+}
+INT GetSlotIndex(DWORD dwID)
+{
+	for (int i = 0; i < MAX_CONNECTIONS; i++)
+	{
+		if (dwThreadIDs[i] == dwID)return i;
+	}
+}
+VOID Shift(INT start)
+{
+	for (INT i = 0; i < MAX_CONNECTIONS; i++)
+	{
+		sockets[i] = sockets[i + 1];
+		dwThreadIDs[i] = dwThreadIDs[i + 1];
+		hThreads[i] = hThreads[i + 1];
+	}
+	sockets[MAX_CONNECTIONS - 1] = NULL;
+	dwThreadIDs[MAX_CONNECTIONS - 1] = NULL;
+	hThreads[MAX_CONNECTIONS - 1] = NULL;
+	g_ActiveClients--;
+}
+VOID ClientHandle(SOCKET client_socket)
+{
+	sockaddr_in client_address;
+	client_address.sin_family = AF_INET;
+	INT namelen = sizeof(client_address);
+	getpeername(client_socket, (sockaddr*)&client_address, &namelen);
+	CHAR sz_client_address[32] = {};
+	sprintf(sz_client_address, "%s:%d - ", inet_ntoa(client_address.sin_addr), ntohs(client_address.sin_port));
+
+	cout << "Client connected:\t" << sz_client_address << "\tSOCKET:\t" << client_socket << endl;
+	INT iResult = 0;
+	DWORD dwError = 0;
+	CHAR szError[256] = {};
 	//7) Получение и отправка данных:
-	CHAR recvbuffer[BUFFER_LENGTH] = {};
-	CHAR sendbuffer[BUFFER_LENGTH] = {};
 	INT iSendResult = 0;
 	do
 	{
+		CHAR sendbuffer[BUFFER_LENGTH] = {};
+		CHAR recvbuffer[BUFFER_LENGTH] = {};
 		iResult = recv(client_socket, recvbuffer, BUFFER_LENGTH, 0);
 		dwError = WSAGetLastError();
 		if (iResult > 0)
 		{
-			cout << recvbuffer << "(" << strlen(recvbuffer) <<" Bytes)" << endl;
+			cout << sz_client_address << recvbuffer << "(" << strlen(recvbuffer) << " Bytes)" << endl;
 			iSendResult = send(client_socket, recvbuffer, strlen(recvbuffer), 0);
 			dwError = WSAGetLastError();
 			if (iSendResult == SOCKET_ERROR)
@@ -132,16 +239,48 @@ void main()
 			closesocket(client_socket);
 		}
 	} while (iResult > 0);
+	DWORD dwID = GetCurrentThreadId();
+	Shift(GetSlotIndex(dwID));
+	cout << sz_client_address << " left" << endl;
 
 	iResult = shutdown(client_socket, SD_BOTH);
 	dwError = WSAGetLastError();
-	if (iResult == SOCKET_ERROR)cout << "Client shutdown failed with  " << FormatLastError(dwError,szError) << endl;
-
-	iResult = shutdown(listen_socket, SD_BOTH);
-	dwError = WSAGetLastError();
-	if (iResult == SOCKET_ERROR)cout << "Server shutdown failed with  " << FormatLastError(dwError,szError) << endl;
-
+	if (iResult == SOCKET_ERROR)cout << "Client shutdown failed with  " << FormatLastError(dwError, szError) << endl;
 	closesocket(client_socket);
-	closesocket(listen_socket);
-	WSACleanup();
+	//	Release(client_socket);
+	ShowActiveClients();
+	ExitThread(0);
+}
+
+/*VOID Release(SOCKET client_socket)
+{
+	for (int i = 0; i < MAX_CONNECTIONS; i++)
+	{
+		if (client_socket == sockets[i])
+		{
+			sockets[i] = NULL;
+			//dwThreadIDs[i] = NULL;
+			//hThreads[i] = NULL;
+			for (int j = i; sockets[j] || j < MAX_CONNECTIONS-1; j++)
+			{
+				sockets[j] = sockets[j + 1];
+				dwThreadIDs[j] = dwThreadIDs[j + 1];
+				hThreads[j] = hThreads[j + 1];
+			}
+		}
+	}
+	g_ActiveClients--;
+	ShowActiveClients();
+}
+*/
+
+VOID ShowActiveClients()
+{
+	HANDLE hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+	CONSOLE_SCREEN_BUFFER_INFO info;
+	GetConsoleScreenBufferInfo(hConsole, &info);
+	COORD cursor = { 25, 1 };
+	SetConsoleCursorPosition(hConsole, cursor);
+	cout << "Количество подключений: " << g_ActiveClients;
+	SetConsoleCursorPosition(hConsole, info.dwCursorPosition);
 }
