@@ -37,7 +37,7 @@ void main()
 		return;
 	}
 
-	//2) Задаем параметры подключения: IP-адрес сервера и порт
+	//2) Задаем параметры подключения: IP-адрес сервера и порт.
 	struct addrinfo hints;
 	struct addrinfo* result;
 	ZeroMemory(&hints, sizeof(hints));
